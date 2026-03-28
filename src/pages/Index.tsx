@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Icon from '@/components/ui/icon';
+import { api } from '@/lib/api';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-type Screen = 'auth' | 'app';
+type Screen = 'auth' | 'app' | 'loading';
 type AuthTab = 'login' | 'register';
 type AppTab = 'chats' | 'search' | 'contacts' | 'profile';
 type MessageStatus = 'sending' | 'sent' | 'read';
@@ -29,9 +30,10 @@ interface Message {
   imageUrl?: string;
   voiceDuration?: number;
   fileName?: string;
-  timestamp: Date;
+  timestamp: string;
   status: MessageStatus;
   deleted?: boolean;
+  _local?: boolean;
 }
 
 interface Chat {
@@ -40,111 +42,54 @@ interface Chat {
   name: string;
   avatar: string;
   color: string;
-  participants: string[];
-  lastMessage?: Message;
+  memberCount?: number;
+  lastMessage?: {
+    id: string; type: string; text?: string; fileName?: string; timestamp: string; senderId: string;
+  };
   unread: number;
+  otherUser?: User | null;
   isTyping?: boolean;
-  pinned?: boolean;
 }
-
-// ─── Mock Data ───────────────────────────────────────────────────────────────
-
-const AVATAR_COLORS = [
-  'from-purple-600 to-pink-500',
-  'from-blue-600 to-cyan-400',
-  'from-green-500 to-teal-400',
-  'from-orange-500 to-red-500',
-  'from-indigo-600 to-purple-400',
-  'from-pink-500 to-rose-400',
-  'from-cyan-500 to-blue-500',
-  'from-yellow-500 to-orange-400',
-];
-
-const ALL_USERS: User[] = [
-  { id: 'u1', username: 'alex_shadow', name: 'Алекс Шадов', bio: 'Разведка и безопасность', avatar: 'АШ', color: AVATAR_COLORS[0], online: true, lastSeen: '' },
-  { id: 'u2', username: 'neon_wolf', name: 'Неон Волков', bio: 'Кибербезопасность | OSINT', avatar: 'НВ', color: AVATAR_COLORS[1], online: true, lastSeen: '' },
-  { id: 'u3', username: 'dark_iris', name: 'Ирис Дарк', bio: 'Аналитик данных', avatar: 'ИД', color: AVATAR_COLORS[2], online: false, lastSeen: '5 мин назад' },
-  { id: 'u4', username: 'cipher_x', name: 'Сайфер Икс', bio: 'Шифрование и протоколы', avatar: 'СИ', color: AVATAR_COLORS[3], online: false, lastSeen: '2 ч назад' },
-  { id: 'u5', username: 'ghost_proto', name: 'Призрак', bio: 'Невидимка сети', avatar: 'ПР', color: AVATAR_COLORS[4], online: true, lastSeen: '' },
-  { id: 'u6', username: 'aurora_sys', name: 'Аврора Сис', bio: 'Системный архитектор', avatar: 'АС', color: AVATAR_COLORS[5], online: false, lastSeen: '1 ч назад' },
-];
-
-const MOCK_MESSAGES: Message[] = [
-  { id: 'm1', chatId: 'c1', senderId: 'u1', type: 'text', text: 'Привет! Как дела с операцией?', timestamp: new Date(Date.now() - 3600000 * 3), status: 'read' },
-  { id: 'm2', chatId: 'c1', senderId: 'me', type: 'text', text: 'Всё под контролем. Собираю данные.', timestamp: new Date(Date.now() - 3600000 * 2), status: 'read' },
-  { id: 'm3', chatId: 'c1', senderId: 'u1', type: 'text', text: 'Отлично. Пришли отчёт когда будет готов 👍', timestamp: new Date(Date.now() - 1800000), status: 'read' },
-  { id: 'm4', chatId: 'c1', senderId: 'me', type: 'text', text: 'Хорошо, примерно через час', timestamp: new Date(Date.now() - 900000), status: 'read' },
-  { id: 'm5', chatId: 'c1', senderId: 'u1', type: 'text', text: 'Принял, жду 🔐', timestamp: new Date(Date.now() - 300000), status: 'read' },
-  { id: 'm6', chatId: 'c2', senderId: 'u2', type: 'text', text: 'Нашёл уязвимость в системе', timestamp: new Date(Date.now() - 7200000), status: 'read' },
-  { id: 'm7', chatId: 'c2', senderId: 'me', type: 'text', text: 'Серьёзно? Какой тип?', timestamp: new Date(Date.now() - 7000000), status: 'read' },
-  { id: 'm8', chatId: 'c2', senderId: 'u2', type: 'text', text: 'SQL-инъекция в API аутентификации. Критично.', timestamp: new Date(Date.now() - 120000), status: 'sent' },
-  { id: 'm9', chatId: 'c3', senderId: 'u3', type: 'text', text: 'Данные по цели готовы', timestamp: new Date(Date.now() - 86400000), status: 'read' },
-  { id: 'm10', chatId: 'c3', senderId: 'me', type: 'text', text: 'Отправляй в защищённый канал', timestamp: new Date(Date.now() - 86000000), status: 'read' },
-  { id: 'm11', chatId: 'cg1', senderId: 'u1', type: 'text', text: 'Команда, завтра брифинг в 10:00', timestamp: new Date(Date.now() - 3600000), status: 'read' },
-  { id: 'm12', chatId: 'cg1', senderId: 'u2', type: 'text', text: 'Принял, буду онлайн', timestamp: new Date(Date.now() - 3500000), status: 'read' },
-  { id: 'm13', chatId: 'cg1', senderId: 'me', type: 'text', text: 'Подготовлю презентацию', timestamp: new Date(Date.now() - 600000), status: 'sent' },
-];
-
-const MOCK_CHATS: Chat[] = [
-  {
-    id: 'c1', type: 'personal', name: 'Алекс Шадов', avatar: 'АШ', color: AVATAR_COLORS[0],
-    participants: ['me', 'u1'], unread: 0, pinned: true,
-    lastMessage: MOCK_MESSAGES.find(m => m.id === 'm5'),
-  },
-  {
-    id: 'c2', type: 'personal', name: 'Неон Волков', avatar: 'НВ', color: AVATAR_COLORS[1],
-    participants: ['me', 'u2'], unread: 1,
-    lastMessage: MOCK_MESSAGES.find(m => m.id === 'm8'),
-  },
-  {
-    id: 'c3', type: 'personal', name: 'Ирис Дарк', avatar: 'ИД', color: AVATAR_COLORS[2],
-    participants: ['me', 'u3'], unread: 0,
-    lastMessage: MOCK_MESSAGES.find(m => m.id === 'm10'),
-  },
-  {
-    id: 'cg1', type: 'group', name: 'Оперативная группа', avatar: 'ОГ', color: AVATAR_COLORS[4],
-    participants: ['me', 'u1', 'u2', 'u3'], unread: 2,
-    lastMessage: MOCK_MESSAGES.find(m => m.id === 'm13'),
-  },
-];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function formatTime(date: Date): string {
-  return date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+function formatTime(ts: string): string {
+  if (!ts) return '';
+  try {
+    const d = new Date(ts);
+    return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  } catch { return ''; }
 }
 
-function formatChatTime(date?: Date): string {
-  if (!date) return '';
-  const diff = Date.now() - date.getTime();
-  if (diff < 86400000) return formatTime(date);
-  if (diff < 172800000) return 'вчера';
-  return date.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+function formatChatTime(ts?: string): string {
+  if (!ts) return '';
+  try {
+    const d = new Date(ts);
+    const diff = Date.now() - d.getTime();
+    if (diff < 86400000) return formatTime(ts);
+    if (diff < 172800000) return 'вчера';
+    return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+  } catch { return ''; }
 }
 
-function genId(): string {
-  return Math.random().toString(36).slice(2, 10);
+function genLocalId(): string {
+  return `local_${Math.random().toString(36).slice(2)}`;
 }
 
-// ─── Avatar Component ────────────────────────────────────────────────────────
+// ─── Avatar ───────────────────────────────────────────────────────────────────
 
 function Avatar({ initials, color, size = 'md', online = false, className = '' }:
   { initials: string; color: string; size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl'; online?: boolean; className?: string }) {
   const sizes: Record<string, string> = {
-    xs: 'w-7 h-7 text-xs',
-    sm: 'w-9 h-9 text-sm',
-    md: 'w-11 h-11 text-sm',
-    lg: 'w-14 h-14 text-base',
-    xl: 'w-20 h-20 text-xl',
+    xs: 'w-7 h-7 text-xs', sm: 'w-9 h-9 text-sm', md: 'w-11 h-11 text-sm',
+    lg: 'w-14 h-14 text-base', xl: 'w-20 h-20 text-xl',
   };
   return (
     <div className={`relative flex-shrink-0 ${className}`}>
       <div className={`${sizes[size]} rounded-full bg-gradient-to-br ${color} flex items-center justify-center font-semibold text-white font-display select-none`}>
-        {initials}
+        {initials || '?'}
       </div>
-      {online && (
-        <div className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-green-400 border-2 border-[#07070f] z-10" />
-      )}
+      {online && <div className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-green-400 border-2 border-[#07070f] z-10" />}
     </div>
   );
 }
@@ -158,56 +103,33 @@ function AuthScreen({ onLogin }: { onLogin: (user: User) => void }) {
   const [name, setName] = useState('');
   const [bio, setBio] = useState('');
   const [error, setError] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const handleLogin = () => {
+  const handle = async () => {
+    setError('');
     if (!username || !password) { setError('Заполните все поля'); return; }
-    setIsLoading(true);
-    setTimeout(() => {
-      const stored: User[] = JSON.parse(localStorage.getItem('osinting_users') || '[]');
-      const allKnown = [...ALL_USERS, ...stored.filter(u => !ALL_USERS.find(au => au.id === u.id))];
-      const found = allKnown.find(u => u.username === username.toLowerCase());
-      if (!found) { setError('Пользователь не найден'); setIsLoading(false); return; }
-      const passwords: Record<string, string> = JSON.parse(localStorage.getItem('osinting_passwords') || '{}');
-      const expected = passwords[found.id] || 'demo123';
-      if (expected !== password) { setError('Неверный пароль'); setIsLoading(false); return; }
-      onLogin(found);
-    }, 800);
-  };
-
-  const handleRegister = () => {
-    if (!username || !password || !name) { setError('Заполните обязательные поля'); return; }
-    if (username.length < 3) { setError('Username минимум 3 символа'); return; }
-    const stored: User[] = JSON.parse(localStorage.getItem('osinting_users') || '[]');
-    const allKnown = [...ALL_USERS, ...stored];
-    if (allKnown.some(u => u.username === username.toLowerCase())) { setError('Username уже занят'); return; }
-    setIsLoading(true);
-    setTimeout(() => {
-      const newUser: User = {
-        id: genId(),
-        username: username.toLowerCase(),
-        name,
-        bio,
-        avatar: name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase(),
-        color: AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)],
-        online: true,
-        lastSeen: '',
-      };
-      localStorage.setItem('osinting_users', JSON.stringify([...stored, newUser]));
-      const passwords: Record<string, string> = JSON.parse(localStorage.getItem('osinting_passwords') || '{}');
-      passwords[newUser.id] = password;
-      localStorage.setItem('osinting_passwords', JSON.stringify(passwords));
-      onLogin(newUser);
-    }, 800);
+    if (tab === 'register' && !name) { setError('Введите имя'); return; }
+    if (password.length < 6) { setError('Пароль минимум 6 символов'); return; }
+    setLoading(true);
+    try {
+      let res;
+      if (tab === 'login') {
+        res = await api.auth.login(username.trim().toLowerCase(), password);
+      } else {
+        res = await api.auth.register(username.trim().toLowerCase(), password, name.trim(), bio.trim());
+      }
+      localStorage.setItem('osinting_token', res.token as string);
+      onLogin(res.user as User);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Ошибка');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
     <div className="relative h-full flex flex-col items-center justify-center overflow-hidden" style={{ background: 'var(--os-bg)' }}>
-      <div className="os-mesh-bg">
-        <div className="blob blob-1" />
-        <div className="blob blob-2" />
-        <div className="blob blob-3" />
-      </div>
+      <div className="os-mesh-bg"><div className="blob blob-1" /><div className="blob blob-2" /><div className="blob blob-3" /></div>
       <div className="relative z-10 w-full max-w-sm px-6 animate-fade-in-scale">
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4 os-glow" style={{ background: 'var(--os-gradient)' }}>
@@ -220,7 +142,7 @@ function AuthScreen({ onLogin }: { onLogin: (user: User) => void }) {
         <div className="flex rounded-xl p-1 mb-6" style={{ background: 'var(--os-surface2)', border: '1px solid var(--os-border)' }}>
           {(['login', 'register'] as AuthTab[]).map(t => (
             <button key={t} onClick={() => { setTab(t); setError(''); }}
-              className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200`}
+              className="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-all duration-200"
               style={tab === t ? { background: 'var(--os-gradient)', color: '#fff' } : { color: 'var(--os-text-muted)' }}>
               {t === 'login' ? 'Войти' : 'Регистрация'}
             </button>
@@ -237,60 +159,45 @@ function AuthScreen({ onLogin }: { onLogin: (user: User) => void }) {
             <input className="os-input w-full pl-8 pr-4 py-3 rounded-xl text-sm" placeholder="username *"
               value={username} onChange={e => setUsername(e.target.value.replace(/\s/g, ''))} style={{ color: 'var(--os-text)' }} />
           </div>
-          <input className="os-input w-full px-4 py-3 rounded-xl text-sm" placeholder="Пароль *" type="password"
+          <input className="os-input w-full px-4 py-3 rounded-xl text-sm" placeholder="Пароль (мин. 6 символов) *" type="password"
             value={password} onChange={e => setPassword(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && (tab === 'login' ? handleLogin() : handleRegister())}
-            style={{ color: 'var(--os-text)' }} />
+            onKeyDown={e => e.key === 'Enter' && handle()} style={{ color: 'var(--os-text)' }} />
           {tab === 'register' && (
             <input className="os-input w-full px-4 py-3 rounded-xl text-sm" placeholder="О себе (необязательно)"
               value={bio} onChange={e => setBio(e.target.value)} style={{ color: 'var(--os-text)' }} />
           )}
+
           {error && (
-            <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm animate-fade-in"
+            <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm animate-fade-in"
               style={{ background: 'rgba(239,68,68,0.1)', color: '#f87171', border: '1px solid rgba(239,68,68,0.2)' }}>
-              <Icon name="AlertCircle" size={14} />
-              {error}
+              <Icon name="AlertCircle" size={14} />{error}
             </div>
           )}
-          <button onClick={tab === 'login' ? handleLogin : handleRegister} disabled={isLoading}
+
+          <button onClick={handle} disabled={loading}
             className="os-btn-primary w-full py-3 rounded-xl font-semibold text-sm mt-2 flex items-center justify-center gap-2">
-            {isLoading
+            {loading
               ? <div className="w-5 h-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
               : <><Icon name={tab === 'login' ? 'LogIn' : 'UserPlus'} size={16} />{tab === 'login' ? 'Войти' : 'Создать аккаунт'}</>
             }
           </button>
         </div>
-
-        {tab === 'login' && (
-          <p className="text-center text-xs mt-4" style={{ color: 'var(--os-text-dim)' }}>
-            Демо: <button className="underline" style={{ color: 'var(--os-purple-light)' }}
-              onClick={() => { setUsername('alex_shadow'); setPassword('demo123'); }}>
-              alex_shadow / demo123
-            </button>
-          </p>
-        )}
       </div>
     </div>
   );
 }
 
-// ─── Message Status ───────────────────────────────────────────────────────────
-
-function MsgStatus({ status }: { status: MessageStatus }) {
-  if (status === 'sending') return <Icon name="Clock" size={11} className="opacity-40" />;
-  if (status === 'sent') return <Icon name="Check" size={11} style={{ color: 'rgba(255,255,255,0.6)' }} />;
-  return <Icon name="CheckCheck" size={11} style={{ color: 'var(--os-cyan)' }} />;
-}
-
 // ─── Typing Indicator ────────────────────────────────────────────────────────
 
-function TypingIndicator() {
+function TypingIndicator({ names }: { names: string[] }) {
+  if (!names.length) return null;
   return (
     <div className="flex items-end gap-2 animate-fade-in mb-1">
-      <div className="px-4 py-3 rounded-2xl rounded-bl-sm flex items-center gap-1" style={{ background: 'var(--os-msg-in)', border: '1px solid var(--os-border)' }}>
-        {[1, 2, 3].map(i => (
-          <div key={i} className={`w-1.5 h-1.5 rounded-full typing-dot-${i}`} style={{ background: 'var(--os-text-muted)' }} />
-        ))}
+      <div className="px-4 py-3 rounded-2xl rounded-bl-sm flex items-center gap-2" style={{ background: 'var(--os-msg-in)', border: '1px solid var(--os-border)' }}>
+        <div className="flex gap-1 items-center">
+          {[1, 2, 3].map(i => <div key={i} className={`w-1.5 h-1.5 rounded-full typing-dot-${i}`} style={{ background: 'var(--os-text-muted)' }} />)}
+        </div>
+        <span className="text-xs" style={{ color: 'var(--os-text-muted)' }}>{names[0]} печатает...</span>
       </div>
     </div>
   );
@@ -307,17 +214,16 @@ function VoiceMessage({ duration, isOwn }: { duration: number; isOwn: boolean })
     if (playing) { setPlaying(false); return; }
     setPlaying(true);
     let p = 0;
-    const interval = setInterval(() => {
+    const iv = setInterval(() => {
       p += 100 / (duration * 10);
       setProgress(Math.min(p, 100));
-      if (p >= 100) { clearInterval(interval); setPlaying(false); setProgress(0); }
+      if (p >= 100) { clearInterval(iv); setPlaying(false); setProgress(0); }
     }, 100);
   };
 
   return (
     <div className="flex items-center gap-2.5 py-0.5 min-w-[160px]">
-      <button onClick={toggle}
-        className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-all hover:scale-110"
+      <button onClick={toggle} className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 transition-all hover:scale-110"
         style={{ background: isOwn ? 'rgba(255,255,255,0.2)' : 'rgba(124,58,237,0.3)' }}>
         <Icon name={playing ? 'Pause' : 'Play'} size={13} className="text-white" />
       </button>
@@ -325,9 +231,7 @@ function VoiceMessage({ duration, isOwn }: { duration: number; isOwn: boolean })
         {bars.map((h, i) => (
           <div key={i} className="waveform-bar flex-shrink-0 rounded-full"
             style={{
-              height: `${h}px`,
-              width: '3px',
-              animationDelay: `${i * 0.04}s`,
+              height: `${h}px`, width: '3px', animationDelay: `${i * 0.04}s`,
               animationPlayState: playing ? 'running' : 'paused',
               background: i / bars.length < progress / 100
                 ? (isOwn ? 'rgba(255,255,255,0.9)' : 'var(--os-purple-light)')
@@ -340,7 +244,15 @@ function VoiceMessage({ duration, isOwn }: { duration: number; isOwn: boolean })
   );
 }
 
-// ─── Chat Message ────────────────────────────────────────────────────────────
+// ─── Message Status ───────────────────────────────────────────────────────────
+
+function MsgStatus({ status }: { status: MessageStatus }) {
+  if (status === 'sending') return <Icon name="Clock" size={11} className="opacity-40" />;
+  if (status === 'sent') return <Icon name="Check" size={11} style={{ color: 'rgba(255,255,255,0.6)' }} />;
+  return <Icon name="CheckCheck" size={11} style={{ color: 'var(--os-cyan)' }} />;
+}
+
+// ─── Chat Message ─────────────────────────────────────────────────────────────
 
 function ChatMessage({ msg, isOwn, senderName, senderAvatar, senderColor, showAvatar, onDelete }:
   { msg: Message; isOwn: boolean; senderName?: string; senderAvatar?: string; senderColor?: string; showAvatar?: boolean; onDelete?: () => void }) {
@@ -361,9 +273,7 @@ function ChatMessage({ msg, isOwn, senderName, senderAvatar, senderColor, showAv
       style={{ animation: 'message-pop 0.25s cubic-bezier(0.34,1.56,0.64,1) forwards' }}>
       {!isOwn && (
         <div className="flex-shrink-0 w-7 mb-0.5">
-          {showAvatar && senderAvatar
-            ? <Avatar initials={senderAvatar} color={senderColor || AVATAR_COLORS[0]} size="xs" />
-            : null}
+          {showAvatar && senderAvatar ? <Avatar initials={senderAvatar} color={senderColor || 'from-purple-600 to-pink-500'} size="xs" /> : null}
         </div>
       )}
       <div className="max-w-[74%] relative" onMouseLeave={() => setShowMenu(false)}>
@@ -375,6 +285,7 @@ function ChatMessage({ msg, isOwn, senderName, senderAvatar, senderColor, showAv
             background: isOwn ? 'var(--os-msg-out)' : 'var(--os-msg-in)',
             border: isOwn ? 'none' : '1px solid var(--os-border)',
             boxShadow: isOwn ? '0 2px 16px rgba(109,40,217,0.35)' : 'none',
+            opacity: msg._local ? 0.7 : 1,
           }}
           onClick={() => setShowMenu(s => !s)}>
           {msg.type === 'text' && (
@@ -383,12 +294,15 @@ function ChatMessage({ msg, isOwn, senderName, senderAvatar, senderColor, showAv
           {msg.type === 'image' && (
             <div>
               <div className="w-48 h-36 rounded-xl overflow-hidden" style={{ background: 'var(--os-surface3)' }}>
-                <img src={msg.imageUrl} alt="" className="w-full h-full object-cover" />
+                {msg.imageUrl
+                  ? <img src={msg.imageUrl} alt="" className="w-full h-full object-cover" />
+                  : <div className="w-full h-full flex items-center justify-center"><div className="w-6 h-6 rounded-full border-2 border-white/30 border-t-white animate-spin" /></div>
+                }
               </div>
               {msg.text && <p className="text-sm mt-1.5" style={{ color: isOwn ? '#fff' : 'var(--os-text)' }}>{msg.text}</p>}
             </div>
           )}
-          {msg.type === 'voice' && <VoiceMessage duration={msg.voiceDuration || 5} isOwn={isOwn} />}
+          {msg.type === 'voice' && <VoiceMessage duration={msg.voiceDuration || 3} isOwn={isOwn} />}
           {msg.type === 'file' && (
             <div className="flex items-center gap-2.5 py-0.5">
               <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
@@ -409,7 +323,7 @@ function ChatMessage({ msg, isOwn, senderName, senderAvatar, senderColor, showAv
           </div>
         </div>
         {showMenu && onDelete && isOwn && (
-          <div className="absolute bottom-full right-0 mb-1 z-20" style={{ animation: 'fadeInScale 0.15s ease forwards' }}>
+          <div className="absolute bottom-full right-0 mb-1 z-20 animate-fade-in-scale">
             <button onClick={() => { onDelete(); setShowMenu(false); }}
               className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-medium"
               style={{ background: 'var(--os-surface3)', border: '1px solid var(--os-border)', color: '#f87171' }}>
@@ -422,53 +336,72 @@ function ChatMessage({ msg, isOwn, senderName, senderAvatar, senderColor, showAv
   );
 }
 
-// ─── Chat Window ─────────────────────────────────────────────────────────────
+// ─── Chat Window ──────────────────────────────────────────────────────────────
 
-function ChatWindow({ chat, allUsers, messages, onSend, onDelete, onClose }:
-  { chat: Chat; allUsers: User[]; messages: Message[]; onSend: (chatId: string, msg: Partial<Message>) => void; onDelete: (msgId: string) => void; onClose: () => void }) {
+function ChatWindow({ chat, currentUser, messages, onSend, onDelete, onClose }:
+  { chat: Chat; currentUser: User; messages: Message[]; onSend: (partial: Partial<Message>) => Promise<void>; onDelete: (msgId: string) => void; onClose: () => void }) {
   const [input, setInput] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
   const [recording, setRecording] = useState(false);
   const [recordTime, setRecordTime] = useState(0);
   const [showAttach, setShowAttach] = useState(false);
+  const [typers, setTypers] = useState<string[]>([]);
   const messagesEnd = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recordTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const typingPollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isTypingRef = useRef(false);
 
   const chatMessages = messages.filter(m => m.chatId === chat.id);
-  const otherUser = chat.type === 'personal'
-    ? allUsers.find(u => chat.participants.includes(u.id)) || null
-    : null;
 
   useEffect(() => {
     messagesEnd.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages.length]);
 
+  // Poll typing indicators
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const res = await api.chats.getTyping(chat.id);
+        const t = (res.typers as Array<{ id: string; name: string }>) || [];
+        setTypers(t.map(x => x.name));
+      } catch { /* silent */ }
+    };
+    typingPollTimer.current = setInterval(poll, 3000);
+    return () => { if (typingPollTimer.current) clearInterval(typingPollTimer.current); };
+  }, [chat.id]);
+
   const handleTyping = (val: string) => {
     setInput(val);
-    setIsTyping(true);
+    if (!isTypingRef.current) {
+      isTypingRef.current = true;
+      api.chats.setTyping(chat.id, true).catch(() => {});
+    }
     if (typingTimer.current) clearTimeout(typingTimer.current);
-    typingTimer.current = setTimeout(() => setIsTyping(false), 2000);
+    typingTimer.current = setTimeout(() => {
+      isTypingRef.current = false;
+      api.chats.setTyping(chat.id, false).catch(() => {});
+    }, 2000);
   };
 
-  const sendText = () => {
+  const sendText = async () => {
     if (!input.trim()) return;
-    onSend(chat.id, { type: 'text', text: input.trim() });
+    const text = input.trim();
     setInput('');
-    setIsTyping(false);
+    isTypingRef.current = false;
+    api.chats.setTyping(chat.id, false).catch(() => {});
+    await onSend({ type: 'text', text });
   };
 
   const sendVoice = () => {
     if (!recording) {
-      setRecording(true);
-      setRecordTime(0);
+      setRecording(true); setRecordTime(0);
       recordTimer.current = setInterval(() => setRecordTime(t => t + 1), 1000);
     } else {
       if (recordTimer.current) clearInterval(recordTimer.current);
-      onSend(chat.id, { type: 'voice', voiceDuration: Math.max(recordTime, 1) });
-      setRecording(false);
-      setRecordTime(0);
+      const dur = Math.max(recordTime, 1);
+      setRecording(false); setRecordTime(0);
+      onSend({ type: 'voice', voiceDuration: dur });
     }
   };
 
@@ -477,19 +410,24 @@ function ChatWindow({ chat, allUsers, messages, onSend, onDelete, onClose }:
     if (!file) return;
     if (file.type.startsWith('image/')) {
       const reader = new FileReader();
-      reader.onload = ev => onSend(chat.id, { type: 'image', imageUrl: ev.target?.result as string });
+      reader.onload = ev => {
+        const data = ev.target?.result as string;
+        onSend({ type: 'image', imageUrl: data });
+      };
       reader.readAsDataURL(file);
     } else {
-      onSend(chat.id, { type: 'file', fileName: file.name });
+      onSend({ type: 'file', fileName: file.name });
     }
     setShowAttach(false);
     e.target.value = '';
   };
 
-  const getUserById = (id: string) => allUsers.find(u => u.id === id);
+  const otherUser = chat.otherUser;
+  const memberMap: Record<string, User> = {};
 
   return (
     <div className="flex flex-col h-full animate-slide-right">
+      {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3 flex-shrink-0" style={{ background: 'var(--os-surface)', borderBottom: '1px solid var(--os-border)' }}>
         <button onClick={onClose} className="opacity-70 hover:opacity-100 transition-opacity">
           <Icon name="ChevronLeft" size={22} style={{ color: 'var(--os-text)' }} />
@@ -498,11 +436,16 @@ function ChatWindow({ chat, allUsers, messages, onSend, onDelete, onClose }:
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-sm truncate" style={{ color: 'var(--os-text)' }}>{chat.name}</div>
           <div className="text-xs" style={{ color: 'var(--os-text-muted)' }}>
-            {chat.type === 'group'
-              ? `${chat.participants.length} участников`
-              : otherUser?.online
-                ? <span className="text-green-400">онлайн</span>
-                : otherUser?.lastSeen || 'давно'}
+            {typers.length > 0
+              ? <span style={{ color: 'var(--os-purple-light)' }}>{typers[0]} печатает...</span>
+              : chat.type === 'group'
+                ? `${chat.memberCount || ''} участников`
+                : otherUser?.online
+                  ? <span className="text-green-400">онлайн</span>
+                  : otherUser?.lastSeen
+                    ? `был(а) ${new Date(otherUser.lastSeen).toLocaleString('ru-RU', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}`
+                    : 'давно'
+            }
           </div>
         </div>
         <button className="opacity-60 hover:opacity-100 transition-opacity">
@@ -513,6 +456,7 @@ function ChatWindow({ chat, allUsers, messages, onSend, onDelete, onClose }:
         </button>
       </div>
 
+      {/* Messages */}
       <div className="flex-1 overflow-y-auto px-3 py-4" style={{ background: 'var(--os-bg)' }}>
         {chatMessages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full gap-3 opacity-30">
@@ -522,33 +466,30 @@ function ChatWindow({ chat, allUsers, messages, onSend, onDelete, onClose }:
         )}
         {chatMessages.map((msg, i) => {
           const prev = chatMessages[i - 1];
-          const isOwn = msg.senderId === 'me';
-          const sender = !isOwn ? getUserById(msg.senderId) : undefined;
+          const isOwn = msg.senderId === currentUser.id;
           const showAvatar = !isOwn && (!prev || prev.senderId !== msg.senderId);
+          const sender = memberMap[msg.senderId];
           return (
             <ChatMessage key={msg.id} msg={msg} isOwn={isOwn}
               senderName={sender?.name} senderAvatar={sender?.avatar} senderColor={sender?.color}
               showAvatar={showAvatar} onDelete={() => onDelete(msg.id)} />
           );
         })}
-        {isTyping && <TypingIndicator />}
+        <TypingIndicator names={typers} />
         <div ref={messagesEnd} />
       </div>
 
       {recording && (
         <div className="flex items-center gap-3 px-4 py-2.5 animate-fade-in" style={{ background: 'rgba(239,68,68,0.08)', borderTop: '1px solid rgba(239,68,68,0.2)' }}>
           <div className="w-2 h-2 rounded-full bg-red-500" style={{ animation: 'pulse 1s infinite' }} />
-          <span className="text-sm" style={{ color: '#f87171' }}>Запись голосового... {recordTime}с</span>
-          <span className="ml-auto text-xs" style={{ color: 'var(--os-text-muted)' }}>нажмите снова чтобы отправить</span>
+          <span className="text-sm" style={{ color: '#f87171' }}>Запись... {recordTime}с</span>
+          <span className="ml-auto text-xs" style={{ color: 'var(--os-text-muted)' }}>нажмите ещё раз — отправить</span>
         </div>
       )}
 
       {showAttach && (
         <div className="px-4 py-3 flex gap-4 animate-slide-up" style={{ background: 'var(--os-surface)', borderTop: '1px solid var(--os-border)' }}>
-          {[
-            { icon: 'Image', label: 'Фото', accept: 'image/*' },
-            { icon: 'File', label: 'Файл', accept: '*/*' },
-          ].map(item => (
+          {[{ icon: 'Image', label: 'Фото', accept: 'image/*' }, { icon: 'File', label: 'Файл', accept: '*/*' }].map(item => (
             <label key={item.icon} className="flex flex-col items-center gap-1.5 cursor-pointer">
               <div className="w-12 h-12 rounded-2xl flex items-center justify-center transition-all hover:scale-110"
                 style={{ background: 'var(--os-surface3)', border: '1px solid var(--os-border)' }}>
@@ -561,14 +502,11 @@ function ChatWindow({ chat, allUsers, messages, onSend, onDelete, onClose }:
         </div>
       )}
 
+      {/* Input bar */}
       <div className="px-3 py-3 flex items-center gap-2 flex-shrink-0" style={{ background: 'var(--os-surface)', borderTop: '1px solid var(--os-border)' }}>
         <button onClick={() => setShowAttach(s => !s)}
           className="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center transition-all"
-          style={{
-            background: showAttach ? 'var(--os-gradient)' : 'var(--os-surface2)',
-            border: '1px solid var(--os-border)',
-            transform: showAttach ? 'rotate(45deg)' : 'none',
-          }}>
+          style={{ background: showAttach ? 'var(--os-gradient)' : 'var(--os-surface2)', border: '1px solid var(--os-border)', transform: showAttach ? 'rotate(45deg)' : 'none' }}>
           <Icon name="Plus" size={18} style={{ color: showAttach ? '#fff' : 'var(--os-text-muted)' }} />
         </button>
         <div className="flex-1 flex items-center rounded-2xl px-4 py-2.5" style={{ background: 'var(--os-surface2)', border: '1px solid var(--os-border)' }}>
@@ -594,13 +532,20 @@ function ChatWindow({ chat, allUsers, messages, onSend, onDelete, onClose }:
 // ─── Chat List Item ───────────────────────────────────────────────────────────
 
 function ChatListItem({ chat, active, onClick }: { chat: Chat; active: boolean; onClick: () => void }) {
+  const lastText = chat.lastMessage
+    ? chat.lastMessage.type === 'voice' ? '🎤 Голосовое'
+      : chat.lastMessage.type === 'image' ? '📷 Фото'
+        : chat.lastMessage.type === 'file' ? `📎 ${chat.lastMessage.fileName}`
+          : chat.lastMessage.text || ''
+    : '';
+
   return (
     <div onClick={onClick}
       className="flex items-center gap-3 px-4 py-3 cursor-pointer transition-all relative"
       style={{ background: active ? 'rgba(124,58,237,0.08)' : 'transparent', borderBottom: '1px solid var(--os-border)' }}>
       {active && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-8 rounded-r-full" style={{ background: 'var(--os-gradient)' }} />}
       <div className="relative flex-shrink-0">
-        <Avatar initials={chat.avatar} color={chat.color} size="md" />
+        <Avatar initials={chat.avatar} color={chat.color} size="md" online={chat.otherUser?.online || false} />
         {chat.type === 'group' && (
           <div className="absolute -bottom-0.5 -right-0.5 w-4 h-4 rounded-full flex items-center justify-center"
             style={{ background: 'var(--os-surface)', border: '1px solid var(--os-border)' }}>
@@ -610,29 +555,19 @@ function ChatListItem({ chat, active, onClick }: { chat: Chat; active: boolean; 
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center justify-between mb-0.5">
-          <div className="flex items-center gap-1.5 min-w-0">
-            <span className="text-sm font-semibold truncate" style={{ color: 'var(--os-text)' }}>{chat.name}</span>
-            {chat.pinned && <Icon name="Pin" size={9} style={{ color: 'var(--os-text-dim)', transform: 'rotate(45deg)', flexShrink: 0 }} />}
-          </div>
-          {chat.lastMessage && (
-            <span className="text-[10px] flex-shrink-0 ml-2" style={{ color: 'var(--os-text-dim)' }}>
-              {formatChatTime(chat.lastMessage.timestamp)}
-            </span>
-          )}
+          <span className="text-sm font-semibold truncate" style={{ color: 'var(--os-text)' }}>{chat.name}</span>
+          <span className="text-[10px] flex-shrink-0 ml-2" style={{ color: 'var(--os-text-dim)' }}>
+            {formatChatTime(chat.lastMessage?.timestamp)}
+          </span>
         </div>
         <div className="flex items-center justify-between">
-          <span className="text-xs truncate max-w-[180px]" style={{ color: 'var(--os-text-muted)' }}>
-            {chat.isTyping
-              ? <span style={{ color: 'var(--os-purple-light)' }}>печатает...</span>
-              : chat.lastMessage?.type === 'voice' ? '🎤 Голосовое'
-                : chat.lastMessage?.type === 'image' ? '📷 Фото'
-                  : chat.lastMessage?.type === 'file' ? `📎 ${chat.lastMessage.fileName}`
-                    : chat.lastMessage?.text || ''}
+          <span className="text-xs truncate max-w-[180px]" style={{ color: chat.isTyping ? 'var(--os-purple-light)' : 'var(--os-text-muted)' }}>
+            {chat.isTyping ? 'печатает...' : lastText}
           </span>
           {chat.unread > 0 && (
             <div className="flex-shrink-0 ml-2 min-w-[18px] h-[18px] rounded-full flex items-center justify-center text-[10px] font-bold text-white px-1"
               style={{ background: 'var(--os-gradient)' }}>
-              {chat.unread}
+              {chat.unread > 9 ? '9+' : chat.unread}
             </div>
           )}
         </div>
@@ -643,26 +578,138 @@ function ChatListItem({ chat, active, onClick }: { chat: Chat; active: boolean; 
 
 // ─── Chats Tab ────────────────────────────────────────────────────────────────
 
-function ChatsTab({ chats, messages, allUsers, onSend, onDelete, initialChat, onClearInitial }:
-  { chats: Chat[]; messages: Message[]; allUsers: User[]; currentUser: User; onSend: (chatId: string, msg: Partial<Message>) => void; onDelete: (msgId: string) => void; initialChat?: Chat | null; onClearInitial?: () => void }) {
-  const [activeChat, setActiveChat] = useState<Chat | null>(initialChat || null);
+function ChatsTab({ currentUser, pendingChat, onClearPending }:
+  { currentUser: User; pendingChat: Chat | null; onClearPending: () => void }) {
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [activeChat, setActiveChat] = useState<Chat | null>(null);
   const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(true);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastPollRef = useRef<string>(new Date(Date.now() - 5000).toISOString());
 
+  // Load initial chats
   useEffect(() => {
-    if (initialChat) { setActiveChat(initialChat); onClearInitial?.(); }
-  }, [initialChat, onClearInitial]);
+    const load = async () => {
+      try {
+        const res = await api.chats.list();
+        setChats((res.chats as Chat[]) || []);
+      } catch { /* silent */ } finally { setLoading(false); }
+    };
+    load();
+  }, []);
+
+  // Open pending chat from search/contacts
+  useEffect(() => {
+    if (pendingChat) {
+      setActiveChat(pendingChat);
+      if (!chats.find(c => c.id === pendingChat.id)) {
+        setChats(prev => [pendingChat, ...prev]);
+      }
+      onClearPending();
+    }
+  }, [pendingChat, onClearPending, chats]);
+
+  // Global polling for new messages across all chats
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const res = await api.messages.globalPoll(lastPollRef.current);
+        const newMsgs = (res.messages as Message[]) || [];
+        if (newMsgs.length > 0) {
+          lastPollRef.current = new Date().toISOString();
+          setMessages(prev => {
+            const ids = new Set(prev.map(m => m.id));
+            const toAdd = newMsgs.filter(m => !ids.has(m.id)).map(m => ({
+              ...m, status: m.senderId === currentUser.id ? 'sent' : 'read' as MessageStatus
+            }));
+            return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
+          });
+          // Update chat last messages and unread counts
+          setChats(prev => prev.map(chat => {
+            const chatNewMsgs = newMsgs.filter(m => m.chatId === chat.id);
+            if (!chatNewMsgs.length) return chat;
+            const last = chatNewMsgs[chatNewMsgs.length - 1];
+            const unreadInc = chatNewMsgs.filter(m => m.senderId !== currentUser.id).length;
+            return {
+              ...chat,
+              lastMessage: { id: last.id, type: last.type, text: last.text, fileName: last.fileName, timestamp: last.timestamp, senderId: last.senderId },
+              unread: activeChat?.id === chat.id ? 0 : chat.unread + unreadInc,
+            };
+          }));
+        }
+      } catch { /* silent */ }
+    };
+    pollRef.current = setInterval(poll, 2000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [currentUser.id, activeChat?.id]);
+
+  // Load messages when opening a chat
+  const handleOpenChat = async (chat: Chat) => {
+    setActiveChat(chat);
+    setChats(prev => prev.map(c => c.id === chat.id ? { ...c, unread: 0 } : c));
+    // Load messages for this chat if not already loaded
+    const existing = messages.filter(m => m.chatId === chat.id);
+    if (existing.length === 0) {
+      try {
+        const res = await api.messages.list(chat.id);
+        const loaded = (res.messages as Message[]).map(m => ({
+          ...m, status: m.senderId === currentUser.id ? 'sent' : 'read' as MessageStatus
+        }));
+        setMessages(prev => [...prev, ...loaded]);
+      } catch { /* silent */ }
+    }
+  };
+
+  const handleSend = useCallback(async (partial: Partial<Message>) => {
+    if (!activeChat) return;
+    const localId = genLocalId();
+    const localMsg: Message = {
+      id: localId, chatId: activeChat.id, senderId: currentUser.id,
+      type: partial.type || 'text', text: partial.text,
+      imageUrl: partial.imageUrl, voiceDuration: partial.voiceDuration, fileName: partial.fileName,
+      timestamp: new Date().toISOString(), status: 'sending', _local: true,
+    };
+    setMessages(prev => [...prev, localMsg]);
+    try {
+      const res = await api.messages.send(
+        activeChat.id, partial.type || 'text', partial.text,
+        partial.type === 'image' ? partial.imageUrl : undefined,
+        partial.voiceDuration, partial.fileName
+      );
+      const serverMsg = res.message as Message;
+      setMessages(prev => prev.map(m => m.id === localId
+        ? { ...serverMsg, status: 'sent' as MessageStatus }
+        : m));
+      setChats(prev => prev.map(c => c.id === activeChat.id
+        ? { ...c, lastMessage: { id: serverMsg.id, type: serverMsg.type, text: serverMsg.text, fileName: serverMsg.fileName, timestamp: serverMsg.timestamp, senderId: serverMsg.senderId } }
+        : c));
+      lastPollRef.current = new Date().toISOString();
+    } catch {
+      setMessages(prev => prev.map(m => m.id === localId ? { ...m, status: 'sent' as MessageStatus, _local: false } : m));
+    }
+  }, [activeChat, currentUser.id]);
+
+  const handleDelete = useCallback(async (msgId: string) => {
+    if (msgId.startsWith('local_')) {
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, deleted: true } : m));
+      return;
+    }
+    try {
+      await api.messages.delete(msgId);
+      setMessages(prev => prev.map(m => m.id === msgId ? { ...m, deleted: true } : m));
+    } catch { /* silent */ }
+  }, []);
 
   const filtered = chats.filter(c => c.name.toLowerCase().includes(search.toLowerCase()));
-  const sorted = [...filtered].sort((a, b) => {
-    if (a.pinned && !b.pinned) return -1;
-    if (!a.pinned && b.pinned) return 1;
-    return (b.lastMessage?.timestamp.getTime() || 0) - (a.lastMessage?.timestamp.getTime() || 0);
-  });
+  const sorted = [...filtered].sort((a, b) =>
+    (b.lastMessage?.timestamp || '').localeCompare(a.lastMessage?.timestamp || ''));
 
   if (activeChat) {
     return (
-      <ChatWindow chat={activeChat} allUsers={allUsers} messages={messages}
-        onSend={onSend} onDelete={onDelete} onClose={() => setActiveChat(null)} />
+      <ChatWindow chat={activeChat} currentUser={currentUser}
+        messages={messages} onSend={handleSend} onDelete={handleDelete}
+        onClose={() => setActiveChat(null)} />
     );
   }
 
@@ -683,14 +730,20 @@ function ChatsTab({ chats, messages, allUsers, onSend, onDelete, initialChat, on
         </div>
       </div>
       <div className="flex-1 overflow-y-auto">
-        {sorted.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full gap-3 opacity-30">
+        {loading && (
+          <div className="flex items-center justify-center h-32 gap-2 opacity-40">
+            <div className="w-5 h-5 rounded-full border-2 border-purple-500/30 border-t-purple-500 animate-spin" />
+            <span className="text-sm" style={{ color: 'var(--os-text-muted)' }}>Загрузка...</span>
+          </div>
+        )}
+        {!loading && sorted.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-40 gap-3 opacity-30">
             <Icon name="MessageSquare" size={40} style={{ color: 'var(--os-text-muted)' }} />
-            <p className="text-sm" style={{ color: 'var(--os-text-muted)' }}>Нет чатов</p>
+            <p className="text-sm" style={{ color: 'var(--os-text-muted)' }}>Нет чатов. Найдите кого-нибудь в Поиске!</p>
           </div>
         )}
         {sorted.map(c => (
-          <ChatListItem key={c.id} chat={c} active={activeChat?.id === c.id} onClick={() => setActiveChat(c)} />
+          <ChatListItem key={c.id} chat={c} active={activeChat?.id === c.id} onClick={() => handleOpenChat(c)} />
         ))}
       </div>
     </div>
@@ -699,15 +752,34 @@ function ChatsTab({ chats, messages, allUsers, onSend, onDelete, initialChat, on
 
 // ─── Search Tab ───────────────────────────────────────────────────────────────
 
-function SearchTab({ allUsers, currentUser, onStartChat }:
-  { allUsers: User[]; currentUser: User; onStartChat: (u: User) => void }) {
+function SearchTab({ currentUser, onStartChat }:
+  { currentUser: User; onStartChat: (chat: Chat) => void }) {
   const [query, setQuery] = useState('');
-  const results = query.trim()
-    ? allUsers.filter(u => u.id !== currentUser.id && (
-      u.username.toLowerCase().includes(query.toLowerCase().replace('@', '')) ||
-      u.name.toLowerCase().includes(query.toLowerCase())
-    ))
-    : [];
+  const [results, setResults] = useState<User[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!query.trim()) { setResults([]); return; }
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const res = await api.auth.searchUsers(query);
+        setResults((res.users as User[]) || []);
+      } catch { setResults([]); } finally { setLoading(false); }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  const startChat = async (user: User) => {
+    try {
+      const res = await api.chats.create('personal', user.id);
+      const chatId = res.chatId as string;
+      onStartChat({
+        id: chatId, type: 'personal', name: user.name, avatar: user.avatar,
+        color: user.color, unread: 0, otherUser: user,
+      });
+    } catch { /* silent */ }
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -729,14 +801,15 @@ function SearchTab({ allUsers, currentUser, onStartChat }:
             <p className="text-sm text-center" style={{ color: 'var(--os-text-muted)' }}>Введите имя или @username</p>
           </div>
         )}
-        {query && results.length === 0 && (
+        {loading && <div className="flex justify-center py-8"><div className="w-5 h-5 rounded-full border-2 border-purple-500/30 border-t-purple-500 animate-spin" /></div>}
+        {!loading && query && results.length === 0 && (
           <div className="pt-8 flex flex-col items-center gap-2 opacity-30">
             <Icon name="SearchX" size={36} style={{ color: 'var(--os-text-muted)' }} />
             <p className="text-sm" style={{ color: 'var(--os-text-muted)' }}>Не найдено</p>
           </div>
         )}
-        {results.map((user, i) => (
-          <div key={user.id} onClick={() => onStartChat(user)}
+        {results.filter(u => u.id !== currentUser.id).map((user, i) => (
+          <div key={user.id} onClick={() => startChat(user)}
             className="flex items-center gap-3 py-3 cursor-pointer rounded-2xl px-3 mb-2 transition-all hover:scale-[1.01] animate-fade-in"
             style={{ background: 'var(--os-surface)', border: '1px solid var(--os-border)', animationDelay: `${i * 0.05}s` }}>
             <Avatar initials={user.avatar} color={user.color} size="md" online={user.online} />
@@ -760,17 +833,35 @@ function SearchTab({ allUsers, currentUser, onStartChat }:
 
 // ─── Contacts Tab ─────────────────────────────────────────────────────────────
 
-function ContactsTab({ allUsers, currentUser, onStartChat }:
-  { allUsers: User[]; currentUser: User; onStartChat: (u: User) => void }) {
-  const contacts = allUsers.filter(u => u.id !== currentUser.id);
-  const online = contacts.filter(u => u.online);
-  const offline = contacts.filter(u => !u.online);
+function ContactsTab({ currentUser, onStartChat }:
+  { currentUser: User; onStartChat: (chat: Chat) => void }) {
+  const [users, setUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const Section = ({ title, users }: { title: string; users: User[] }) => (
+  useEffect(() => {
+    api.auth.getUsers().then(res => {
+      setUsers((res.users as User[]) || []);
+    }).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  const startChat = async (user: User) => {
+    try {
+      const res = await api.chats.create('personal', user.id);
+      onStartChat({
+        id: res.chatId as string, type: 'personal', name: user.name,
+        avatar: user.avatar, color: user.color, unread: 0, otherUser: user,
+      });
+    } catch { /* silent */ }
+  };
+
+  const online = users.filter(u => u.online);
+  const offline = users.filter(u => !u.online);
+
+  const Section = ({ title, list }: { title: string; list: User[] }) => (
     <div className="mb-2">
       <div className="px-4 py-2 text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--os-text-dim)' }}>{title}</div>
-      {users.map(user => (
-        <div key={user.id} onClick={() => onStartChat(user)}
+      {list.map(user => (
+        <div key={user.id} onClick={() => startChat(user)}
           className="flex items-center gap-3 px-4 py-3 cursor-pointer transition-all hover:bg-white/5"
           style={{ borderBottom: '1px solid var(--os-border)' }}>
           <Avatar initials={user.avatar} color={user.color} size="md" online={user.online} />
@@ -778,7 +869,11 @@ function ContactsTab({ allUsers, currentUser, onStartChat }:
             <div className="text-sm font-semibold" style={{ color: 'var(--os-text)' }}>{user.name}</div>
             <div className="text-xs" style={{ color: 'var(--os-text-muted)' }}>
               @{user.username}
-              {!user.online && user.lastSeen && <span className="ml-2" style={{ color: 'var(--os-text-dim)' }}>• {user.lastSeen}</span>}
+              {!user.online && user.lastSeen && (
+                <span className="ml-2" style={{ color: 'var(--os-text-dim)' }}>
+                  • {new Date(user.lastSeen).toLocaleString('ru-RU', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}
+                </span>
+              )}
             </div>
           </div>
           <Icon name="ChevronRight" size={14} style={{ color: 'var(--os-text-dim)' }} />
@@ -793,13 +888,20 @@ function ContactsTab({ allUsers, currentUser, onStartChat }:
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-black font-display os-gradient-text">Контакты</h1>
           <span className="text-xs px-2.5 py-1 rounded-full" style={{ background: 'var(--os-surface2)', color: 'var(--os-text-muted)', border: '1px solid var(--os-border)' }}>
-            {contacts.length}
+            {users.length}
           </span>
         </div>
       </div>
       <div className="flex-1 overflow-y-auto pt-2">
-        {online.length > 0 && <Section title={`В сети · ${online.length}`} users={online} />}
-        {offline.length > 0 && <Section title="Не в сети" users={offline} />}
+        {loading && <div className="flex justify-center py-8"><div className="w-5 h-5 rounded-full border-2 border-purple-500/30 border-t-purple-500 animate-spin" /></div>}
+        {!loading && users.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-40 gap-3 opacity-30">
+            <Icon name="Users" size={40} style={{ color: 'var(--os-text-muted)' }} />
+            <p className="text-sm" style={{ color: 'var(--os-text-muted)' }}>Пока никого нет</p>
+          </div>
+        )}
+        {online.length > 0 && <Section title={`В сети · ${online.length}`} list={online} />}
+        {offline.length > 0 && <Section title="Не в сети" list={offline} />}
       </div>
     </div>
   );
@@ -811,30 +913,31 @@ function ProfileTab({ user, onLogout, onUpdate }: { user: User; onLogout: () => 
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(user.name);
   const [bio, setBio] = useState(user.bio);
+  const [saving, setSaving] = useState(false);
 
-  const save = () => {
-    const updated = { ...user, name, bio, avatar: name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase() };
-    onUpdate(updated);
-    localStorage.setItem('osinting_current_user', JSON.stringify(updated));
-    setEditing(false);
+  const save = async () => {
+    if (!name.trim()) return;
+    setSaving(true);
+    try {
+      const res = await api.auth.updateProfile(name.trim(), bio.trim());
+      onUpdate(res.user as User);
+      setEditing(false);
+    } catch { /* silent */ } finally { setSaving(false); }
   };
 
   const menuItems = [
     { icon: 'Edit3', label: 'Редактировать профиль', action: () => setEditing(true) },
-    { icon: 'Bell', label: 'Уведомления' },
-    { icon: 'Shield', label: 'Конфиденциальность' },
-    { icon: 'Lock', label: 'Безопасность' },
-    { icon: 'Palette', label: 'Оформление' },
-    { icon: 'HelpCircle', label: 'Помощь' },
+    { icon: 'Bell', label: 'Уведомления', action: () => {} },
+    { icon: 'Shield', label: 'Конфиденциальность', action: () => {} },
+    { icon: 'Lock', label: 'Безопасность', action: () => {} },
+    { icon: 'Palette', label: 'Оформление', action: () => {} },
+    { icon: 'HelpCircle', label: 'Помощь', action: () => {} },
   ];
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
       <div className="relative px-4 pt-10 pb-8 flex flex-col items-center text-center overflow-hidden flex-shrink-0">
-        <div className="os-mesh-bg opacity-50">
-          <div className="blob blob-1" />
-          <div className="blob blob-2" />
-        </div>
+        <div className="os-mesh-bg opacity-50"><div className="blob blob-1" /><div className="blob blob-2" /></div>
         <div className="relative z-10 flex flex-col items-center">
           <div className="avatar-gradient-border mb-4">
             <Avatar initials={user.avatar} color={user.color} size="xl" online />
@@ -846,7 +949,10 @@ function ProfileTab({ user, onLogout, onUpdate }: { user: User; onLogout: () => 
               <input className="os-input w-full px-3 py-2 rounded-xl text-sm text-center"
                 placeholder="О себе..." value={bio} onChange={e => setBio(e.target.value)} style={{ color: 'var(--os-text)' }} />
               <div className="flex gap-2">
-                <button onClick={save} className="flex-1 py-2 rounded-xl text-sm font-semibold text-white os-btn-primary">Сохранить</button>
+                <button onClick={save} disabled={saving}
+                  className="flex-1 py-2 rounded-xl text-sm font-semibold text-white os-btn-primary flex items-center justify-center">
+                  {saving ? <div className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" /> : 'Сохранить'}
+                </button>
                 <button onClick={() => setEditing(false)} className="flex-1 py-2 rounded-xl text-sm font-semibold"
                   style={{ background: 'var(--os-surface2)', color: 'var(--os-text-muted)', border: '1px solid var(--os-border)' }}>Отмена</button>
               </div>
@@ -865,29 +971,18 @@ function ProfileTab({ user, onLogout, onUpdate }: { user: User; onLogout: () => 
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-2 px-4 mb-4">
-        {[{ label: 'Сообщений', value: '1.2k' }, { label: 'Контактов', value: '24' }, { label: 'Групп', value: '3' }].map(s => (
-          <div key={s.label} className="flex flex-col items-center py-3 rounded-2xl" style={{ background: 'var(--os-surface)', border: '1px solid var(--os-border)' }}>
-            <span className="text-lg font-bold font-display os-gradient-text">{s.value}</span>
-            <span className="text-[10px] mt-0.5" style={{ color: 'var(--os-text-muted)' }}>{s.label}</span>
-          </div>
-        ))}
-      </div>
-
       <div className="px-4 space-y-2">
         {menuItems.map(item => (
           <button key={item.label} onClick={item.action}
             className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl transition-all hover:scale-[1.01] text-left"
             style={{ background: 'var(--os-surface)', border: '1px solid var(--os-border)' }}>
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
-              style={{ background: 'rgba(124,58,237,0.12)' }}>
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(124,58,237,0.12)' }}>
               <Icon name={item.icon as 'Edit3'} size={16} style={{ color: 'var(--os-purple-light)' }} />
             </div>
             <span className="text-sm font-medium flex-1" style={{ color: 'var(--os-text)' }}>{item.label}</span>
             <Icon name="ChevronRight" size={14} style={{ color: 'var(--os-text-dim)' }} />
           </button>
         ))}
-
         <button onClick={onLogout}
           className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl transition-all hover:scale-[1.01] mt-2"
           style={{ background: 'rgba(239,68,68,0.07)', border: '1px solid rgba(239,68,68,0.18)' }}>
@@ -919,9 +1014,7 @@ function BottomNav({ active, onChange, totalUnread }: { active: AppTab; onChange
           <button key={t.id} onClick={() => onChange(t.id)}
             className="flex-1 flex flex-col items-center gap-1 py-1.5 rounded-xl transition-all duration-200 relative"
             style={{ background: isActive ? 'rgba(124,58,237,0.1)' : 'transparent' }}>
-            {isActive && (
-              <div className="absolute top-0 left-1/2 -translate-x-1/2 w-6 h-0.5 rounded-full" style={{ background: 'var(--os-gradient)' }} />
-            )}
+            {isActive && <div className="absolute top-0 left-1/2 -translate-x-1/2 w-6 h-0.5 rounded-full" style={{ background: 'var(--os-gradient)' }} />}
             <div className="relative">
               <Icon name={t.icon as 'MessageCircle'} size={20} style={{ color: isActive ? 'var(--os-purple-light)' : 'var(--os-text-dim)' }} />
               {t.id === 'chats' && totalUnread > 0 && (
@@ -931,9 +1024,7 @@ function BottomNav({ active, onChange, totalUnread }: { active: AppTab; onChange
                 </div>
               )}
             </div>
-            <span className="text-[10px] font-medium" style={{ color: isActive ? 'var(--os-purple-light)' : 'var(--os-text-dim)' }}>
-              {t.label}
-            </span>
+            <span className="text-[10px] font-medium" style={{ color: isActive ? 'var(--os-purple-light)' : 'var(--os-text-dim)' }}>{t.label}</span>
           </button>
         );
       })}
@@ -945,64 +1036,30 @@ function BottomNav({ active, onChange, totalUnread }: { active: AppTab; onChange
 
 function AppScreen({ currentUser, onLogout }: { currentUser: User; onLogout: () => void }) {
   const [tab, setTab] = useState<AppTab>('chats');
-  const [messages, setMessages] = useState<Message[]>(MOCK_MESSAGES);
-  const [chats, setChats] = useState<Chat[]>(MOCK_CHATS);
   const [user, setUser] = useState(currentUser);
   const [pendingChat, setPendingChat] = useState<Chat | null>(null);
+  const [totalUnread, setTotalUnread] = useState(0);
 
-  const allUsers = [
-    ...ALL_USERS,
-    ...JSON.parse(localStorage.getItem('osinting_users') || '[]').filter((u: User) => !ALL_USERS.find(au => au.id === u.id) && u.id !== user.id),
-  ];
-
-  const totalUnread = chats.reduce((s, c) => s + c.unread, 0);
-
-  const handleSend = useCallback((chatId: string, partial: Partial<Message>) => {
-    const msg: Message = {
-      id: genId(), chatId, senderId: 'me',
-      type: partial.type || 'text', text: partial.text,
-      imageUrl: partial.imageUrl, voiceDuration: partial.voiceDuration, fileName: partial.fileName,
-      timestamp: new Date(), status: 'sending',
-    };
-    setMessages(prev => [...prev, msg]);
-    setChats(prev => prev.map(c => c.id === chatId ? { ...c, lastMessage: msg, unread: 0 } : c));
-    setTimeout(() => {
-      setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, status: 'sent' } : m));
-      setTimeout(() => setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, status: 'read' } : m)), 1500);
-    }, 600);
-  }, []);
-
-  const handleDelete = useCallback((msgId: string) => {
-    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, deleted: true } : m));
-  }, []);
-
-  const handleStartChat = (targetUser: User) => {
-    let chat = chats.find(c => c.type === 'personal' && c.participants.includes(targetUser.id));
-    if (!chat) {
-      chat = { id: genId(), type: 'personal', name: targetUser.name, avatar: targetUser.avatar, color: targetUser.color, participants: ['me', targetUser.id], unread: 0 };
-      setChats(prev => [...prev, chat!]);
-    }
+  const handleStartChat = (chat: Chat) => {
     setPendingChat(chat);
     setTab('chats');
+  };
+
+  const handleLogout = async () => {
+    try { await api.auth.logout(); } catch { /* silent */ }
+    localStorage.removeItem('osinting_token');
+    onLogout();
   };
 
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--os-bg)' }}>
       <div className="flex-1 overflow-hidden">
         {tab === 'chats' && (
-          <ChatsTab chats={chats} messages={messages} allUsers={allUsers} currentUser={user}
-            onSend={handleSend} onDelete={handleDelete}
-            initialChat={pendingChat} onClearInitial={() => setPendingChat(null)} />
+          <ChatsTab currentUser={user} pendingChat={pendingChat} onClearPending={() => setPendingChat(null)} />
         )}
-        {tab === 'search' && (
-          <SearchTab allUsers={allUsers} currentUser={user} onStartChat={handleStartChat} />
-        )}
-        {tab === 'contacts' && (
-          <ContactsTab allUsers={allUsers} currentUser={user} onStartChat={handleStartChat} />
-        )}
-        {tab === 'profile' && (
-          <ProfileTab user={user} onLogout={onLogout} onUpdate={setUser} />
-        )}
+        {tab === 'search' && <SearchTab currentUser={user} onStartChat={handleStartChat} />}
+        {tab === 'contacts' && <ContactsTab currentUser={user} onStartChat={handleStartChat} />}
+        {tab === 'profile' && <ProfileTab user={user} onLogout={handleLogout} onUpdate={u => { setUser(u); }} />}
       </div>
       <BottomNav active={tab} onChange={setTab} totalUnread={totalUnread} />
     </div>
@@ -1012,36 +1069,37 @@ function AppScreen({ currentUser, onLogout }: { currentUser: User; onLogout: () 
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
 export default function Index() {
-  const [screen, setScreen] = useState<Screen>('auth');
+  const [screen, setScreen] = useState<Screen>('loading');
   const [currentUser, setCurrentUser] = useState<User | null>(null);
 
   useEffect(() => {
-    // Init demo passwords
-    const passwords: Record<string, string> = JSON.parse(localStorage.getItem('osinting_passwords') || '{}');
-    ALL_USERS.forEach(u => { if (!passwords[u.id]) passwords[u.id] = 'demo123'; });
-    localStorage.setItem('osinting_passwords', JSON.stringify(passwords));
-    // Init demo users
-    const stored: User[] = JSON.parse(localStorage.getItem('osinting_users') || '[]');
-    const merged = [...ALL_USERS, ...stored.filter(u => !ALL_USERS.find(au => au.id === u.id))];
-    localStorage.setItem('osinting_users', JSON.stringify(merged));
-    // Auto-login
-    const saved = localStorage.getItem('osinting_current_user');
-    if (saved) {
-      try { const u = JSON.parse(saved); setCurrentUser(u); setScreen('app'); } catch (e) { console.warn(e); }
-    }
+    const token = localStorage.getItem('osinting_token');
+    if (!token) { setScreen('auth'); return; }
+    api.auth.me().then(res => {
+      setCurrentUser(res.user as User);
+      setScreen('app');
+    }).catch(() => {
+      localStorage.removeItem('osinting_token');
+      setScreen('auth');
+    });
   }, []);
 
-  const handleLogin = (user: User) => {
-    setCurrentUser(user);
-    setScreen('app');
-    localStorage.setItem('osinting_current_user', JSON.stringify(user));
-  };
+  const handleLogin = (user: User) => { setCurrentUser(user); setScreen('app'); };
+  const handleLogout = () => { setCurrentUser(null); setScreen('auth'); };
 
-  const handleLogout = () => {
-    localStorage.removeItem('osinting_current_user');
-    setCurrentUser(null);
-    setScreen('auth');
-  };
+  if (screen === 'loading') {
+    return (
+      <div className="h-full flex flex-col items-center justify-center gap-4" style={{ background: 'var(--os-bg)' }}>
+        <div className="os-mesh-bg"><div className="blob blob-1" /><div className="blob blob-2" /></div>
+        <div className="relative z-10 flex flex-col items-center gap-4">
+          <div className="w-16 h-16 rounded-2xl flex items-center justify-center animate-spin-slow os-glow" style={{ background: 'var(--os-gradient)' }}>
+            <Icon name="Shield" size={32} className="text-white" />
+          </div>
+          <span className="text-sm font-display font-bold os-gradient-text">OSINTING</span>
+        </div>
+      </div>
+    );
+  }
 
   if (screen === 'auth') return <AuthScreen onLogin={handleLogin} />;
   if (screen === 'app' && currentUser) return <AppScreen currentUser={currentUser} onLogout={handleLogout} />;
